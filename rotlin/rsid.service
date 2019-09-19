@@ -1,0 +1,14 @@
+[Unit]
+Description=RS Industrial Demonstrator
+Requires=cockpit.service
+After=cockpit.service
+
+[Service]
+ExecStart=/opt/rsid/bin/plc-rotlin
+Restart=always
+RestartSec=3
+User=bb
+Group=bb
+
+[Install]
+WantedBy=multi-user.target

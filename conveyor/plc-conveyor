@@ -1,0 +1,167 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+# Copyright (c) 2019 RS Components Ltd
+# SPDX-License-Identifier: Apache License 2.0
+
+import brainboxes
+from binascii import unhexlify
+import time
+
+# Initialise variables
+
+enst = False
+runst = False
+prevRunst = False
+step = 0
+
+# Duration of process step
+
+stepTime = 5
+
+# API endpoints
+
+ed538ip = '192.168.127.254'
+bb400ip = '127.0.0.1'
+
+# Check if a bit is set 
+
+def isBitSet(resp, pos):
+    intval = int.from_bytes(unhexlify((resp[3:])), byteorder='big')
+    return intval & 1 << pos != 0
+
+# Return True for ENABLED, False for DISABLED and otherwise None
+
+def getEnable():
+    try:
+        with brainboxes.AsciiIo(ipaddr=ed538ip, port=9500, timeout=1.0) as ed538:
+            rxdata = ed538.command_response(b'@01')
+    except:
+        print('  *** ED-538 getEnable: Failed to connect!')  
+
+    if rxdata is None:
+        print('  *** ED-538 getEnable: No response received!')
+        return
+
+    elif len(rxdata) != 5:
+        print('  *** ED-538 getEnable: Bad response received!')
+        return
+
+    else:
+        state = isBitSet(rxdata, 0)
+        return(state)
+
+# Return True for START, False for STOP and otherwise None
+
+def getRun():
+    try:
+        with brainboxes.AsciiIo(ipaddr=bb400ip, port=9500, timeout=1.0) as bb400:
+            rxdata = bb400.command_response(b'@01')
+    except:
+        print('  *** BB-400 getRun: Failed to connect!')
+
+    if rxdata is None:
+        print('  *** BB-400 getRun: No response received!')
+        return
+
+    elif len(rxdata) != 5:
+        print('  *** BB-400 getRun: Bad response received!')
+        return
+
+    else:
+        stop_button = isBitSet(rxdata, 1)
+        start_button = isBitSet(rxdata, 0)
+
+    if stop_button == False and start_button == True:
+        return False
+    elif stop_button == True and start_button == False:
+        return True
+    else:
+        return
+
+def setBeacon(state):
+    if state == 'red':
+        msgs = (b'#011600', b'#011500', b'#011401')
+    elif state == 'amber':
+        msgs = (b'#011600', b'#011400', b'#011501')
+    elif state == 'green':
+        msgs = (b'#011400', b'#011500', b'#011601')
+    else:
+        print('  *** BB-400 setBeacon invalid state: {0}'.format(state))
+        return
+
+    try:
+        with brainboxes.AsciiIo(ipaddr=bb400ip, port=9500, timeout=1.0) as bb400:
+            for txdata in msgs:
+                data = bb400.command_noresponse(txdata)
+                time.sleep(0.01)
+    except:
+        print('  *** BB-400 setBeacon: Failed to connect!')
+
+def setActuator(state):
+    if state == 'idle':
+        txdata = b'#010A00'
+    elif state == 'conveyor':
+        txdata = b'#010A01'
+    else:
+        print('  *** Invalid actuator state: {0}'.format(state))
+        return
+
+    try:
+        with brainboxes.AsciiIo(ipaddr=ed538ip, port=9500, timeout=1.0) as ed538:
+            data = ed538.command_noresponse(txdata)
+    except:
+        print('  *** ED-538 setActuator: Failed to connect!')
+
+def runProcess():
+    global step
+
+    if step == 0:
+        setBeacon('red')
+        setActuator('idle')
+    elif step == 1:
+        setBeacon('green')
+        setActuator('conveyor')
+    else:
+        step = 0
+
+runProcess()
+
+while True:
+
+    # Save previous run state
+    prevRunst = runst
+
+    # Get the enable current state
+    enable = getEnable()
+    if enable != None:
+        enst = enable
+
+    # Obey buttons and allow run if we're enabled
+    if enst == True:
+        run = getRun()
+        if run != None: 
+            runst = run
+    else:
+        runst = False
+
+    # Stop if required
+
+    if runst == False and prevRunst == True:
+        print('  Stopping! Run: {0} // Enable: {1}'.format(runst, enst))
+        runst = False
+        step = 0
+        runProcess()
+
+    # Run the plant process
+
+    if runst == True and step == 0:
+        step = 1
+
+        print('  Running step: {0}'.format(step))
+        runProcess()
+    else:
+        print('Run: {0} // Enable: {1}'.format(runst, enst))
+
+    # Don't scan too fast
+
+    time.sleep(0.2)
